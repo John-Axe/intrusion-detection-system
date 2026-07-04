@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.log
+*.db
+*.db-journal
+venv/
+baseline.json
+firewall_log.json
+alerts.db
+test.db
