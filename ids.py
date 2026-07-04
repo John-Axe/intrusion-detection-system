@@ -26,6 +26,8 @@ import time
 from collections import defaultdict, deque
 from datetime import datetime
 
+from shared_finding import append_shared_finding, reset_findings_file
+
 DB_PATH = "alerts.db"
 
 PORT_SCAN_WINDOW_SEC = 5
@@ -52,8 +54,9 @@ def init_db(path=DB_PATH):
 
 
 class Detector:
-    def __init__(self, conn):
+    def __init__(self, conn, findings_path=None):
         self.conn = conn
+        self.findings_path = findings_path
         self.port_events = defaultdict(deque)      # src -> deque[(ts, dport)]
         self.conn_events = defaultdict(deque)       # (src,dport) -> deque[ts]
         self.all_events = deque()                   # ts of every packet
@@ -66,6 +69,8 @@ class Detector:
         )
         self.conn.commit()
         print(f"[ALERT] {ts} {alert_type:12} src={src or '-':16} {detail}")
+        if self.findings_path:
+            append_shared_finding(alert_type, src, detail, self.findings_path)
 
     def process(self, src: str, dst: str, dport, now=None):
         now = now if now is not None else time.time()
@@ -99,12 +104,12 @@ class Detector:
             self._raise("BRUTE_FORCE", src, f"{len(cdq)} connection attempts to {dst}:{dport} in {BRUTE_FORCE_WINDOW_SEC}s")
 
 
-def run_demo():
+def run_demo(findings_path=None):
     """Feed the detector a synthetic stream that contains a port scan,
     an SSH brute force, and a traffic spike, so you can see all three
     alert types fire without needing root or a live network."""
     conn = init_db()
-    detector = Detector(conn)
+    detector = Detector(conn, findings_path=findings_path)
     t = time.time()
 
     print("[*] Simulating normal background traffic...")
@@ -130,10 +135,10 @@ def run_demo():
     print("\n[*] Demo complete. Alerts stored in alerts.db. Run --serve to view the dashboard.")
 
 
-def run_live(iface):
+def run_live(iface, findings_path=None):
     from scapy.all import sniff, IP, TCP
     conn = init_db()
-    detector = Detector(conn)
+    detector = Detector(conn, findings_path=findings_path)
 
     def handle(pkt):
         if IP in pkt and TCP in pkt:
@@ -209,14 +214,23 @@ def main():
     parser.add_argument("--demo", action="store_true", help="Run synthetic attack demo and populate alerts.db")
     parser.add_argument("--serve", action="store_true", help="Launch the Flask alert dashboard")
     parser.add_argument("--iface", help="Interface for live capture (needs root)")
+    parser.add_argument(
+        "--emit-findings",
+        default=None,
+        help="Also append alerts to findings.jsonl (shared ecosystem finding schema) at "
+        "this path, for observability-stack's Promtail to tail. Reset at the start of each run.",
+    )
     args = parser.parse_args()
 
+    if args.emit_findings:
+        reset_findings_file(args.emit_findings)
+
     if args.demo:
-        run_demo()
+        run_demo(findings_path=args.emit_findings)
     elif args.serve:
         serve_dashboard()
     else:
-        run_live(args.iface)
+        run_live(args.iface, findings_path=args.emit_findings)
 
 
 if __name__ == "__main__":
